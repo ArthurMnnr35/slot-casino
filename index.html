@@ -1145,6 +1145,12 @@
     const restartButton = document.getElementById("restartButton");
     const reels = [...document.querySelectorAll(".reel")];
     const reelTracks = reels.map((reel) => reel.querySelector(".reel-track"));
+    const touchMedia = window.matchMedia("(pointer: coarse)");
+    const audioState = {
+      context: null,
+      masterGain: null
+    };
+    let lastHapticTime = 0;
 
     const stageValue = document.getElementById("stageValue");
     const recordValue = document.getElementById("recordValue");
@@ -1259,10 +1265,252 @@
       message.textContent = text;
     }
 
+    function isTouchHapticsDevice() {
+      return touchMedia.matches || navigator.maxTouchPoints > 0;
+    }
+
     function vibrate(pattern) {
-      if (navigator.vibrate) {
+      if (navigator.vibrate && isTouchHapticsDevice()) {
         navigator.vibrate(pattern);
       }
+    }
+
+    function stopSpinHaptics() {
+      if (navigator.vibrate && isTouchHapticsDevice()) {
+        navigator.vibrate(0);
+      }
+    }
+
+    function pulseHaptic(duration, minGap = 36) {
+      if (!(navigator.vibrate && isTouchHapticsDevice())) {
+        return;
+      }
+
+      const now = performance.now();
+      if (now - lastHapticTime < minGap) {
+        return;
+      }
+
+      lastHapticTime = now;
+      navigator.vibrate(duration);
+    }
+
+    function startSpinHaptics() {
+      lastHapticTime = 0;
+      pulseHaptic(16, 0);
+    }
+
+    async function ensureAudioContext() {
+      const AudioCtor = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtor) {
+        return null;
+      }
+
+      if (!audioState.context) {
+        try {
+          audioState.context = new AudioCtor();
+          audioState.masterGain = audioState.context.createGain();
+          audioState.masterGain.gain.value = 0.18;
+          audioState.masterGain.connect(audioState.context.destination);
+        } catch {
+          audioState.context = null;
+          audioState.masterGain = null;
+          return null;
+        }
+      }
+
+      if (audioState.context.state === "suspended") {
+        try {
+          await audioState.context.resume();
+        } catch {
+          return null;
+        }
+      }
+
+      return audioState.context;
+    }
+
+    function playTone(context, {
+      time = context.currentTime,
+      frequency = 440,
+      endFrequency = frequency,
+      duration = 0.16,
+      gain = 0.04,
+      type = "triangle"
+    }) {
+      if (!audioState.masterGain) {
+        return;
+      }
+
+      const oscillator = context.createOscillator();
+      const envelope = context.createGain();
+
+      oscillator.type = type;
+      oscillator.frequency.setValueAtTime(frequency, time);
+      oscillator.frequency.exponentialRampToValueAtTime(Math.max(1, endFrequency), time + duration);
+
+      envelope.gain.setValueAtTime(0.0001, time);
+      envelope.gain.exponentialRampToValueAtTime(gain, time + 0.012);
+      envelope.gain.exponentialRampToValueAtTime(0.0001, time + duration);
+
+      oscillator.connect(envelope);
+      envelope.connect(audioState.masterGain);
+      oscillator.start(time);
+      oscillator.stop(time + duration + 0.03);
+    }
+
+    function playSpinTick(reelIndex = 0, depth = 0) {
+      const context = audioState.context;
+      if (!context) {
+        return;
+      }
+
+      const time = context.currentTime;
+      const base = 210 + reelIndex * 18 + Math.min(depth, 6) * 2;
+      playTone(context, {
+        time,
+        frequency: base,
+        endFrequency: base - 44,
+        duration: 0.04,
+        gain: 0.026,
+        type: "square"
+      });
+      playTone(context, {
+        time: time + 0.006,
+        frequency: 880 + reelIndex * 60,
+        endFrequency: 620 + reelIndex * 40,
+        duration: 0.032,
+        gain: 0.008,
+        type: "triangle"
+      });
+    }
+
+    function playReelStopClack(reelIndex = 0) {
+      const context = audioState.context;
+      if (!context) {
+        return;
+      }
+
+      const time = context.currentTime;
+      const base = 140 + reelIndex * 12;
+      playTone(context, {
+        time,
+        frequency: base,
+        endFrequency: base * 0.82,
+        duration: 0.06,
+        gain: 0.042,
+        type: "square"
+      });
+      playTone(context, {
+        time: time + 0.008,
+        frequency: 640 + reelIndex * 30,
+        endFrequency: 360 + reelIndex * 18,
+        duration: 0.05,
+        gain: 0.015,
+        type: "triangle"
+      });
+    }
+
+    async function startSpinAudio() {
+      const context = await ensureAudioContext();
+      if (!context) {
+        return;
+      }
+    }
+
+    function stopSpinAudio() {
+      return;
+    }
+
+    async function playTripleWinSound() {
+      const context = await ensureAudioContext();
+      if (!context) {
+        return;
+      }
+
+      const time = context.currentTime + 0.01;
+      [523.25, 659.25, 783.99].forEach((frequency, index) => {
+        playTone(context, {
+          time: time + index * 0.07,
+          frequency,
+          endFrequency: frequency * 1.03,
+          duration: 0.18,
+          gain: 0.04,
+          type: "triangle"
+        });
+      });
+      playTone(context, {
+        time,
+        frequency: 261.63,
+        endFrequency: 329.63,
+        duration: 0.32,
+        gain: 0.018,
+        type: "sine"
+      });
+    }
+
+    async function playDiamondJackpotSound() {
+      const context = await ensureAudioContext();
+      if (!context) {
+        return;
+      }
+
+      const time = context.currentTime + 0.01;
+      [392, 523.25, 659.25, 783.99, 1046.5].forEach((frequency, index) => {
+        playTone(context, {
+          time: time + index * 0.075,
+          frequency,
+          endFrequency: frequency * 1.04,
+          duration: 0.24,
+          gain: 0.042,
+          type: index < 2 ? "triangle" : "sine"
+        });
+      });
+      [1318.51, 1567.98].forEach((frequency, index) => {
+        playTone(context, {
+          time: time + 0.36 + index * 0.09,
+          frequency,
+          endFrequency: frequency,
+          duration: 0.34,
+          gain: 0.03,
+          type: "triangle"
+        });
+      });
+    }
+
+    async function playDynamiteLoseSound() {
+      const context = await ensureAudioContext();
+      if (!context) {
+        return;
+      }
+
+      const time = context.currentTime + 0.01;
+      [392, 311.13, 246.94].forEach((frequency, index) => {
+        playTone(context, {
+          time: time + index * 0.08,
+          frequency,
+          endFrequency: frequency * 0.76,
+          duration: 0.18,
+          gain: 0.038,
+          type: index === 0 ? "triangle" : "sine"
+        });
+      });
+      playTone(context, {
+        time: time + 0.05,
+        frequency: 164.81,
+        endFrequency: 72,
+        duration: 0.34,
+        gain: 0.032,
+        type: "sawtooth"
+      });
+      playTone(context, {
+        time: time + 0.16,
+        frequency: 110,
+        endFrequency: 55,
+        duration: 0.24,
+        gain: 0.022,
+        type: "triangle"
+      });
     }
 
     function renderSymbolCell(symbolId) {
@@ -1536,7 +1784,6 @@
     function animateReels(finalSymbols, luck) {
       const jobs = reels.map((reel, index) => {
         const track = reelTracks[index];
-        const reelHeight = reel.clientHeight;
         const sequence = [state.currentSymbols[index]];
         const spinDepth = 14 + index * 3;
 
@@ -1555,6 +1802,9 @@
         return new Promise((resolve) => {
           let finished = false;
           let fallbackTimer = null;
+          let rafId = 0;
+          let lastStep = 0;
+          let cellHeight = reel.getBoundingClientRect().height;
 
           const settleTrack = () => {
             if (finished) {
@@ -1564,9 +1814,16 @@
             finished = true;
             track.removeEventListener("transitionend", handleTransitionEnd);
             window.clearTimeout(fallbackTimer);
+            window.cancelAnimationFrame(rafId);
+
+            if (lastStep < settleIndex - 1) {
+              lastStep = settleIndex - 1;
+            }
 
             track.style.transition = "none";
             track.style.willChange = "auto";
+            playReelStopClack(index);
+            pulseHaptic(14, 0);
             resolve();
           };
 
@@ -1578,14 +1835,42 @@
             settleTrack();
           };
 
+          const sampleSteps = () => {
+            if (finished) {
+              return;
+            }
+
+            const matrix = new DOMMatrixReadOnly(getComputedStyle(track).transform);
+            const traveled = Math.max(0, -matrix.m42);
+            const step = Math.min(settleIndex, Math.floor(traveled / cellHeight));
+
+            if (step > lastStep) {
+              for (let currentStep = lastStep + 1; currentStep <= step; currentStep += 1) {
+                if (currentStep < settleIndex) {
+                  playSpinTick(index, currentStep);
+                  pulseHaptic(8, 42);
+                }
+              }
+              lastStep = step;
+            }
+
+            rafId = window.requestAnimationFrame(sampleSteps);
+          };
+
           requestAnimationFrame(() => {
             requestAnimationFrame(() => {
+              const firstCell = track.firstElementChild;
+              cellHeight = firstCell
+                ? firstCell.getBoundingClientRect().height
+                : reel.getBoundingClientRect().height;
+              const settleOffset = Number((settleIndex * cellHeight).toFixed(3));
               const duration = 760 + index * 180;
               fallbackTimer = window.setTimeout(settleTrack, duration + 120);
 
               track.addEventListener("transitionend", handleTransitionEnd);
               track.style.transition = `transform ${duration}ms cubic-bezier(0.16, 0.84, 0.16, 1)`;
-              track.style.transform = `translate3d(0, -${settleIndex * reelHeight}px, 0)`;
+              track.style.transform = `translate3d(0, -${settleOffset}px, 0)`;
+              rafId = window.requestAnimationFrame(sampleSteps);
             });
           });
         });
@@ -1638,10 +1923,16 @@
 
       updateHud();
       updateMessage(`Mise ${formatEuro(spinBet)}. Chance calculee a x${spinLuck.toFixed(2)}.`);
-      vibrate(18);
+      startSpinHaptics();
+      void startSpinAudio();
 
       const finalSymbols = determineOutcome(spinLuck);
-      await animateReels(finalSymbols, spinLuck);
+      try {
+        await animateReels(finalSymbols, spinLuck);
+      } finally {
+        stopSpinAudio();
+        stopSpinHaptics();
+      }
 
       state.currentSymbols = finalSymbols;
       const result = evaluateOutcome(finalSymbols, spinBet);
@@ -1654,6 +1945,11 @@
         pushRecentOutcome(true);
         updateMessage(result.message);
         vibrate([20, 30, 60]);
+        if (result.symbol.id === "diamond") {
+          void playDiamondJackpotSound();
+        } else {
+          void playTripleWinSound();
+        }
       } else if (result.type === "halve") {
         const beforeHalf = state.bank;
         state.bank = Math.floor(state.bank / 2);
@@ -1663,6 +1959,7 @@
         pushRecentOutcome(false);
         updateMessage(`Triple dynamite. Ton solde passe de ${formatEuro(beforeHalf)} a ${formatEuro(state.bank)}.`);
         vibrate([40, 40, 60]);
+        void playDynamiteLoseSound();
       } else {
         pushRecentOutcome(false);
         updateMessage(result.message);
@@ -1692,6 +1989,8 @@
 
       state.ended = true;
       state.spinning = false;
+      stopSpinAudio();
+      stopSpinHaptics();
 
       if (state.timerId) {
         clearInterval(state.timerId);
@@ -1743,6 +2042,8 @@
         state.timerId = null;
       }
 
+      stopSpinAudio();
+      stopSpinHaptics();
       overlay.classList.remove("is-visible");
       machine.classList.remove("is-winning");
       updateMessage("Triple x3. Diamant x20. Dynamite = solde divise par 2.");
